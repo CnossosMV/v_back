@@ -1,0 +1,16 @@
+.pf-c-form-control {
+  min-height: 2.75rem;
+  border: 1px solid var(--versya-border);
+  border-radius: 0.55rem;
+  box-shadow: none;
+  color: var(--versya-text);
+}
+
+.pf-c-form-control:hover {
+  border-color: #c4b5d4;
+}
+
+.pf-c-form-control:focus {
+  border-color: var(--versya-purple-light);
+  box-shadow: 0 0 0 3px rgba(107, 70, 193, 0.16);
+}

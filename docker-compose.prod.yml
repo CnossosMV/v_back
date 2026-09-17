@@ -1,0 +1,257 @@
+version: "3.8"
+
+services:
+  # Backend service (pull from registry)
+  backend:
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    container_name: customer-backend-prod
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - KEYCLOAK_URL=${KEYCLOAK_URL}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID}
+      - KEYCLOAK_JWKS_URL=${KEYCLOAK_JWKS_URL}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - EVOLUTION_API_BASE_URL=http://evolution-api:8080
+      - EVOLUTION_API_GLOBAL_KEY=${EVOLUTION_API_GLOBAL_KEY}
+      - MILLION_VERIFIER_API_KEY=${MILLION_VERIFIER_API_KEY}
+      - MILLIONVERIFIER_API_BASE_URL=${MILLIONVERIFIER_API_BASE_URL}
+      - MILLIONVERIFIER_BULK_API_BASE_URL=${MILLIONVERIFIER_BULK_API_BASE_URL}
+      - BACKEND_BASE_URL=${BACKEND_BASE_URL}
+      - API_BASE_URL=${API_BASE_URL}
+      - SDK_CDN_URL=${SDK_CDN_URL}
+      - VAULT_URL=http://vault:8200
+      - VAULT_TOKEN=${VAULT_ROOT_TOKEN}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - META_APP_ID=${META_APP_ID}
+      - META_APP_SECRET=${META_APP_SECRET}
+      - META_CONFIG_ID=${META_CONFIG_ID}
+      - META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN}
+      - WEBSITE_URL=${WEBSITE_URL}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}
+      - EVOLUTION_API_URL=http://evolution-api:8080
+      - EVOLUTION_API_KEY=${EVOLUTION_API_GLOBAL_KEY}
+      - VERSYA_EDGE_CONFIG_SECRET=${VERSYA_EDGE_CONFIG_SECRET}
+      - VERSYA_TRACKING_CNAME_TARGET=${VERSYA_TRACKING_CNAME_TARGET:-tracking.versya.io}
+      - TRACKING_SDK_ORIGIN=${TRACKING_SDK_ORIGIN}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID}
+      - MCP_ENABLED=${MCP_ENABLED:-false}
+      - MCP_ADMIN_ENABLED=${MCP_ADMIN_ENABLED:-false}
+      - MCP_PUBLIC_BASE_URL=${MCP_PUBLIC_BASE_URL}
+      - MCP_AUTH_ISSUER=${MCP_AUTH_ISSUER}
+      - MCP_AUTH_AUDIENCE=${MCP_AUTH_AUDIENCE}
+      - MCP_JWKS_URL=${MCP_JWKS_URL}
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS}
+      - MCP_READONLY_SQL_TIMEOUT_MS=${MCP_READONLY_SQL_TIMEOUT_MS:-5000}
+      - USE_LOCALE_RESOLUTION=${USE_LOCALE_RESOLUTION:-true}
+      - USE_TEMPLATE_VARIANTS=${USE_TEMPLATE_VARIANTS:-true}
+    volumes:
+      - media_data:/app/media
+      # LocalStorageBackend stores Project Import bundles and knowledge assets
+      # here. Keep them across immutable backend container replacements.
+      - knowledge_data:/app/data/knowledge
+    networks:
+      - customer-network
+    restart: unless-stopped
+    depends_on:
+      - db
+      - redis
+      - evolution-api
+      - vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Database
+  db:
+    image: postgres:15
+    container_name: customer-db-prod
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_MULTIPLE_DATABASES=evolution_db,vault_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+    networks:
+      - customer-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: customer-redis-prod
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - customer-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Evolution API v2.3.7 - supports LID contacts (WhatsApp Linked Identity Device)
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: customer-evolution-api-prod
+    ports:
+      - "8081:8080"
+    environment:
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/evolution_db
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_prod
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      - DATABASE_SAVE_DATA_LABELS=true
+      - DATABASE_SAVE_DATA_HISTORIC=true
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://redis:6379
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_REDIS_TTL=604800
+      - CACHE_REDIS_SAVE_INSTANCES=true
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_GLOBAL_KEY}
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - SERVER_TYPE=http
+      - SERVER_PORT=8080
+      - CORS_ORIGIN=*
+      - CORS_METHODS=GET,POST,PUT,DELETE
+      - CORS_CREDENTIALS=true
+      - LOG_LEVEL=ERROR,WARN,DEBUG,INFO,LOG,VERBOSE,DARK,WEBHOOKS
+      - LOG_COLOR=true
+      - LOG_BAILEYS=error
+      - DEL_INSTANCE=false
+      - PROVIDER_HOST=http://localhost:8081
+      - PROVIDER_PORT=8080
+      - RABBITMQ_ENABLED=false
+      - WEBSOCKET_ENABLED=false
+      - WA_BUSINESS_TOKEN_WEBHOOK=evolution
+      - WA_BUSINESS_URL=https://graph.facebook.com
+      - WA_BUSINESS_VERSION=v18.0
+      - WA_BUSINESS_LANGUAGE=pt_BR
+      - WEBHOOK_GLOBAL_ENABLED=false
+      - CONFIG_SESSION_PHONE_CLIENT=Customer WhatsApp
+      - CONFIG_SESSION_PHONE_NAME=Customer
+      - CONFIG_SESSION_PHONE_VERSION=2.3000.1030444778
+      - QRCODE_LIMIT=30
+      - LANGUAGE=en
+      - STORE_MESSAGES=true
+      - STORE_MESSAGE_UP=true
+      - STORE_CONTACTS=true
+      - STORE_CHATS=true
+
+    volumes:
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
+    networks:
+      - customer-network
+    restart: unless-stopped
+    depends_on:
+      - db
+      - redis
+
+  # Infisical - Secret Management
+  vault:
+    image: hashicorp/vault:latest
+    container_name: customer-vault-prod
+    ports:
+      - "8082:8200"
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=${VAULT_ROOT_TOKEN}
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+      - VAULT_ADDR=http://0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - vault_data:/vault/data
+    networks:
+      - customer-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # Keycloak (Optional - for enhanced auth)
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: customer-keycloak-prod
+    environment:
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN_USER}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://db:5432/keycloak_db
+      - KC_DB_USERNAME=${POSTGRES_USER}
+      - KC_DB_PASSWORD=${POSTGRES_PASSWORD}
+      - KC_HOSTNAME=${KEYCLOAK_HOSTNAME:-auth.versya.io}
+      - KC_HOSTNAME_STRICT=true
+      - KC_HOSTNAME_STRICT_HTTPS=true
+      - KC_HTTP_ENABLED=true
+      - KC_HTTPS_PROTOCOLS=TLSv1.3,TLSv1.2
+      - KC_PROXY_HEADERS=xforwarded
+      - KC_HEALTH_ENABLED=true
+      - KC_METRICS_ENABLED=true
+      - KC_PROXY=edge
+    command: start
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/themes:/opt/keycloak/themes:ro
+    networks:
+      - customer-network
+    restart: unless-stopped
+    depends_on:
+      - db
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && timeout 5 cat <&3 | grep -q '200 OK' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  evolution_instances:
+    driver: local
+  evolution_store:
+    driver: local
+  vault_data:
+    driver: local
+  media_data:
+    driver: local
+  knowledge_data:
+    driver: local
+
+networks:
+  customer-network:
+    driver: bridge

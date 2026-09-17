@@ -1,0 +1,50 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+gunicorn==23.0.0
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
+pydantic[email]==2.13.4
+python-dotenv==1.0.1
+python-multipart==0.0.18
+fastapi-cors==0.0.2
+dnspython==2.7.0
+cryptography==44.0.0
+httpx==0.28.1
+PyJWT==2.10.1
+requests==2.32.4
+mcp==1.27.2
+
+# Chatbot / LangChain / LangGraph dependencies
+langchain==0.3.13
+langchain-openai==0.2.14
+langchain-anthropic==0.3.12
+langchain-google-genai==2.0.8
+langchain-community==0.3.13
+langchain-core==0.3.53
+langgraph==0.2.63
+chromadb==0.5.23
+beautifulsoup4==4.12.3
+pypdf==5.1.0
+tiktoken==0.8.0
+lxml==5.3.0
+unstructured==0.16.9
+python-magic==0.4.27
+markdown==3.7
+
+# Webhook JSONPath extraction
+jsonpath-ng==1.6.1
+
+# Cloud storage (lazy-loaded, only when STORAGE_BACKEND=s3)
+boto3>=1.28.0
+
+# Real-time & Push
+redis[hiredis]==5.0.0
+pywebpush==2.0.0
+Pillow>=10.0.0
+Babel==2.16.0  # locale-aware money/date/number formatting (content i18n)
+phonenumbers==9.0.12  # E.164 validation and country resolution
+tzdata>=2024.1  # IANA timezone data on hosts (notably Windows) without a system zoneinfo database
+
+# Production server
+gunicorn>=21.0.0

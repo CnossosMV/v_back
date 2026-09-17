@@ -1,0 +1,17 @@
+name = "versya-tracking-proxy"
+main = "src/index.js"
+compatibility_date = "2026-05-19"
+
+# Bind this Worker to the managed tracking hostname routes in Cloudflare.
+# Customer hostnames are provisioned from Versya using Cloudflare for SaaS.
+
+[[kv_namespaces]]
+binding = "TENANT_CONFIG_KV"
+id = "replace-with-kv-namespace-id"
+
+[vars]
+PROXY_VERSION = "0.1.0"
+VERSYA_API_ORIGIN = "https://api.versya.app"
+
+# Set with `wrangler secret put EDGE_CONFIG_SECRET`.
+# EDGE_CONFIG_SECRET must match backend VERSYA_EDGE_CONFIG_SECRET.

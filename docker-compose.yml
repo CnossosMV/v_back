@@ -1,0 +1,200 @@
+name: customer
+
+services:
+  backend:
+    build: .
+    container_name: customer-backend
+    command: ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8001", "--reload", "--access-logfile", "-", "--error-logfile", "-", "--timeout", "120"]
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/customer_db
+      - BACKEND_URL=http://customer-backend:8001
+      - BACKEND_BASE_URL=http://localhost:8001
+      - FRONTEND_URL=http://localhost:3001
+      - EVOLUTION_API_URL=http://customer-evolution-api:8080
+      - MILLION_VERIFIER_API_KEY=${MILLION_VERIFIER_API_KEY}
+      - MILLIONVERIFIER_API_BASE_URL=${MILLIONVERIFIER_API_BASE_URL}
+      - MILLIONVERIFIER_BULK_API_BASE_URL=${MILLIONVERIFIER_BULK_API_BASE_URL}
+      - VAULT_URL=http://customer-vault:8200
+      - KEYCLOAK_URL=http://customer-keycloak:8080
+      - KEYCLOAK_REALM=autoflow
+      - KEYCLOAK_CLIENT_ID=autoflow-frontend
+      - GOOGLE_CLIENT_ID=609497034187-ug0oh5526pjuddesqq67ri2viuu62fs7.apps.googleusercontent.com
+      - JWT_SECRET=your-secure-jwt-secret-key-autoflow-2024
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      - CORS_ORIGINS=http://localhost:3001,http://localhost:3002,http://localhost:5173
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-mailto:support@versya.io}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    networks:
+      - customer_network
+
+  db:
+    image: postgres:15
+    container_name: customer-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: customer_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - customer_postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+    networks:
+      - customer_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d customer_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer
+    container_name: customer-adminer
+    ports:
+      - "8290:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=db
+      - ADMINER_DESIGN=pepa-linha-dark
+    depends_on:
+      - db
+    networks:
+      - customer_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: customer-redis
+    ports:
+      - "6380:6379"
+    networks:
+      - customer_network
+    restart: unless-stopped
+
+  evolution-api:
+    image: atendai/evolution-api:v2.2.3
+    container_name: customer-evolution-api
+    ports:
+      - "8003:8080"
+    environment:
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://postgres:postgres@db:5432/evolution_db?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_dev
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      - DATABASE_SAVE_DATA_LABELS=true
+      - DATABASE_SAVE_DATA_HISTORIC=true
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:?EVOLUTION_API_KEY is required}
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - SERVER_TYPE=http
+      - SERVER_PORT=8080
+      - CORS_ORIGIN=*
+      - CORS_METHODS=POST,GET,PUT,DELETE
+      - CORS_CREDENTIALS=true
+      - LOG_LEVEL=ERROR,WARN,DEBUG,INFO,LOG,VERBOSE,DARK,WEBHOOKS
+      - LOG_COLOR=true
+      - LOG_BAILEYS=error
+      - DEL_INSTANCE=false
+      - PROVIDER_HOST=http://localhost:8003
+      - PROVIDER_PORT=8080
+      - RABBITMQ_ENABLED=false
+      - WEBSOCKET_ENABLED=false
+      - WA_BUSINESS_TOKEN_WEBHOOK=evolution
+      - WA_BUSINESS_URL=https://graph.facebook.com
+      - WA_BUSINESS_VERSION=v18.0
+      - WA_BUSINESS_LANGUAGE=pt_BR
+      - WEBHOOK_GLOBAL_ENABLED=false
+      - CONFIG_SESSION_PHONE_CLIENT=evolution
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - CONFIG_SESSION_PHONE_VERSION=2.3000.1026080446
+      - QRCODE_LIMIT=30
+      - LANGUAGE=en
+      - STORE_MESSAGES=true
+      - STORE_MESSAGE_UP=true
+      - STORE_CONTACTS=true
+      - STORE_CHATS=true
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://customer-redis:6379/1
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_REDIS_SAVE_INSTANCES=false
+      - CACHE_LOCAL_ENABLED=false
+    volumes:
+      - customer_evolution_instances:/evolution/instances
+      - customer_evolution_store:/evolution/store
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - customer_network
+    restart: unless-stopped
+
+  vault:
+    image: hashicorp/vault:latest
+    container_name: customer-vault
+    ports:
+      - "8005:8200"
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=customer-dev-token-123
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+      - VAULT_ADDR=http://0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - customer_network
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: customer-keycloak
+    ports:
+      - "8006:8080"
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin123
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://db:5432/keycloak_db
+      - KC_DB_USERNAME=postgres
+      - KC_DB_PASSWORD=postgres
+      - KC_HOSTNAME_STRICT=false
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_HTTP_ENABLED=true
+      - KC_HEALTH_ENABLED=true
+      - KC_METRICS_ENABLED=true
+    command: start-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - customer_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  customer_postgres_data:
+    external: true
+  customer_evolution_instances:
+    external: true
+  customer_evolution_store:
+    external: true
+
+networks:
+  customer_network:
+    external: true

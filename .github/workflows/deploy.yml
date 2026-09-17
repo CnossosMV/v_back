@@ -1,0 +1,534 @@
+name: Deploy Backend to Production
+
+# redeploy trigger: 2026-06-17
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+  DOCKER_REGISTRY: ghcr.io
+  # Note: github.repository is already the repo name, no need to add /backend
+  # Using lowercase for Docker compatibility
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Run Tests
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Create test environment file
+        run: |
+          cat > .env.test << EOF
+          DATABASE_URL=postgresql://test:test@localhost:5432/test
+          JWT_SECRET=test-secret-key-for-testing-only
+          BACKEND_BASE_URL=http://localhost:8001
+          CORS_ORIGINS=["http://localhost:3000"]
+          WEBSITE_URL=http://localhost:3000
+          EOF
+
+      - name: Run database migrations
+        run: |
+          export DATABASE_URL=postgresql://test:test@localhost:5432/test
+          alembic upgrade head
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+
+      - name: Import application smoke test
+        run: python -c "import app.main"
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          JWT_SECRET: test-secret-key-for-testing-only
+
+      - name: Check model/migration drift
+        run: python scripts/check_model_migration_drift.py
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+
+      - name: Run tests
+        run: |
+          pytest --cov=app --cov-report=xml --cov-report=term-missing --cov-fail-under=0
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          JWT_SECRET: test-secret-key-for-testing-only
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scan
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: |
+          python -m venv .security-audit
+          .security-audit/bin/python -m pip install --upgrade pip pip-audit
+          python -m venv .security-static
+          .security-static/bin/python -m pip install --upgrade pip bandit semgrep
+
+      - name: Check for known security vulnerabilities with pip-audit
+        continue-on-error: true
+        run: .security-audit/bin/pip-audit -r requirements.txt --desc --format=json --output=security-audit.json
+
+      - name: Run Bandit security linter
+        continue-on-error: true
+        run: .security-static/bin/bandit -r app/ -f json -o bandit-report.json
+
+      - name: Run Semgrep
+        continue-on-error: true
+        run: .security-static/bin/semgrep --config=auto --json --output=semgrep-report.json app/
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            security-audit.json
+            bandit-report.json
+            semgrep-report.json
+          if-no-files-found: warn
+
+  build:
+    runs-on: ubuntu-latest
+    name: Build Docker Image
+    needs: [test, security-scan]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Convert image name to lowercase
+        id: image_name
+        run: echo "lowercase=$(echo '${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image_name.outputs.lowercase }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: [build]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ vars.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Create deployment directory
+        run: |
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            sudo mkdir -p /opt/customer-app
+            sudo chown -R ${{ vars.SSH_USER }}:${{ vars.SSH_USER }} /opt/customer-app
+            sudo chmod -R 755 /opt/customer-app
+          "
+
+      - name: Copy deployment files
+        run: |
+          scp docker-compose.prod.yml ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/
+          scp init-databases.sql ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "mkdir -p /opt/customer-app/scripts /opt/customer-app/keycloak/themes"
+          scp scripts/prepare_keycloak_mcp.sh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/scripts/
+          scp scripts/prepare_keycloak_theme.sh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/scripts/
+          scp -r keycloak/themes/versya ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/keycloak/themes/
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            chmod 750 /opt/customer-app/scripts/prepare_keycloak_mcp.sh /opt/customer-app/scripts/prepare_keycloak_theme.sh
+            find /opt/customer-app/keycloak/themes/versya -type d -exec chmod 755 {} +
+            find /opt/customer-app/keycloak/themes/versya -type f -exec chmod 644 {} +
+          "
+
+      - name: Create production environment file
+        run: |
+          # Convert to lowercase for Docker compatibility
+          IMAGE_NAME_LOWER=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            cat > /opt/customer-app/.env << EOF
+          BACKEND_IMAGE=${IMAGE_NAME_LOWER}:latest
+          DATABASE_URL=postgresql://${{ vars.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/${{ vars.POSTGRES_DB }}
+          POSTGRES_USER=${{ vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB=${{ vars.POSTGRES_DB }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          BACKEND_BASE_URL=${{ vars.BACKEND_BASE_URL }}
+          API_BASE_URL=${{ vars.API_BASE_URL }}
+          SDK_CDN_URL=${{ vars.SDK_CDN_URL }}
+          CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
+          GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+          KEYCLOAK_URL=${{ vars.KEYCLOAK_URL }}
+          KEYCLOAK_REALM=${{ vars.KEYCLOAK_REALM }}
+          KEYCLOAK_CLIENT_ID=${{ vars.KEYCLOAK_CLIENT_ID }}
+          KEYCLOAK_JWKS_URL=${{ vars.KEYCLOAK_JWKS_URL }}
+          KEYCLOAK_HOSTNAME=${{ vars.KEYCLOAK_HOSTNAME }}
+          KEYCLOAK_ADMIN_USER=${{ vars.KEYCLOAK_ADMIN_USER }}
+          KEYCLOAK_ADMIN_PASSWORD=${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
+          EVOLUTION_API_GLOBAL_KEY=${{ secrets.EVOLUTION_API_GLOBAL_KEY }}
+          MILLION_VERIFIER_API_KEY=${{ secrets.MILLION_VERIFIER_API_KEY }}
+          MILLIONVERIFIER_API_BASE_URL=https://api.millionverifier.com
+          MILLIONVERIFIER_BULK_API_BASE_URL=https://bulkapi.millionverifier.com
+          VAULT_ROOT_TOKEN=${{ secrets.VAULT_ROOT_TOKEN }}
+          WEBSITE_URL=${{ vars.WEBSITE_URL }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
+          META_APP_ID=${{ vars.META_APP_ID }}
+          META_APP_SECRET=${{ secrets.META_APP_SECRET }}
+          META_CONFIG_ID=${{ vars.META_CONFIG_ID }}
+          META_WEBHOOK_VERIFY_TOKEN=${{ secrets.META_WEBHOOK_VERIFY_TOKEN }}
+          FRONTEND_URL=${{ vars.FRONTEND_URL }}
+          VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_PUBLIC_KEY=${{ vars.VAPID_PUBLIC_KEY }}
+          TRACKING_BASE_URL=${{ vars.TRACKING_BASE_URL }}
+          VERSYA_EDGE_CONFIG_SECRET=${{ secrets.VERSYA_EDGE_CONFIG_SECRET }}
+          VERSYA_TRACKING_CNAME_TARGET=${{ vars.VERSYA_TRACKING_CNAME_TARGET }}
+          TRACKING_SDK_ORIGIN=${{ vars.TRACKING_SDK_ORIGIN }}
+          CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID=${{ vars.CLOUDFLARE_ZONE_ID }}
+          MCP_ENABLED=${{ vars.MCP_ENABLED }}
+          MCP_ADMIN_ENABLED=${{ vars.MCP_ADMIN_ENABLED }}
+          MCP_PUBLIC_BASE_URL=${{ vars.MCP_PUBLIC_BASE_URL }}
+          MCP_AUTH_ISSUER=${{ vars.MCP_AUTH_ISSUER }}
+          MCP_AUTH_AUDIENCE=${{ vars.MCP_AUTH_AUDIENCE }}
+          MCP_OAUTH_CLIENT_ID=${{ vars.MCP_OAUTH_CLIENT_ID }}
+          MCP_AUDIENCE_CLIENT_ID=${{ vars.MCP_AUDIENCE_CLIENT_ID }}
+          MCP_JWKS_URL=${{ vars.MCP_JWKS_URL }}
+          MCP_ALLOWED_HOSTS=${{ vars.MCP_ALLOWED_HOSTS }}
+          MCP_ALLOWED_ORIGINS=${{ vars.MCP_ALLOWED_ORIGINS }}
+          MCP_READONLY_SQL_TIMEOUT_MS=${{ vars.MCP_READONLY_SQL_TIMEOUT_MS }}
+          MCP_GRANT_ADMIN_SCOPE=false
+          MCP_ENABLE_DYNAMIC_REGISTRATION=true
+          MCP_DYNAMIC_REGISTRATION_TRUSTED_HOSTS=localhost,127.0.0.1
+          USE_LOCALE_RESOLUTION=true
+          USE_TEMPLATE_VARIANTS=true
+          EOF
+          "
+
+      - name: Pull latest Docker image
+        run: |
+          # Convert to lowercase for Docker compatibility
+          IMAGE_NAME_LOWER=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            cd /opt/customer-app
+            echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # Explicitly pull the backend image (lowercase)
+            docker pull ${IMAGE_NAME_LOWER}:latest
+            # Pull other images via Docker Compose v2
+            docker compose -f docker-compose.prod.yml pull --ignore-pull-failures
+          "
+
+      - name: Deploy with zero-downtime
+        run: |
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            cd /opt/customer-app
+            
+            echo '=== Starting Complete Stack Deployment ==='
+            
+            # Keep the currently healthy backend serving while dependencies,
+            # OAuth policy and migrations are prepared. `up -d backend` near
+            # the end replaces only the application container.
+            echo 'Ensuring database and core services are running...'
+            docker compose -f docker-compose.prod.yml up -d db redis
+            
+            # Wait for database to be ready
+            echo 'Waiting for database to be ready...'
+            DB_READY=0
+            for i in {1..60}; do
+              if docker compose -f docker-compose.prod.yml exec -T db pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB} > /dev/null 2>&1; then
+                echo 'Database is ready'
+                DB_READY=1
+                break
+              fi
+              echo \"Waiting for database... (\$i/60)\"
+              sleep 5
+            done
+            if [ \$DB_READY -ne 1 ]; then
+              echo 'Database did not become ready'
+              docker compose -f docker-compose.prod.yml ps db
+              docker compose -f docker-compose.prod.yml logs --tail=100 db
+              exit 1
+            fi
+            
+            # Start Keycloak
+            echo 'Starting Keycloak...'
+            docker compose -f docker-compose.prod.yml up -d keycloak
+            
+            # Wait for Keycloak to be ready
+            echo 'Waiting for Keycloak to be ready...'
+            KEYCLOAK_READY=0
+            for i in {1..120}; do
+              if timeout 5 bash -c '</dev/tcp/localhost/8080' > /dev/null 2>&1; then
+                echo 'Keycloak is ready'
+                KEYCLOAK_READY=1
+                break
+              fi
+              echo \"Waiting for Keycloak... (\$i/120)\"
+              sleep 5
+            done
+            if [ \$KEYCLOAK_READY -ne 1 ]; then
+              echo 'Keycloak did not become ready'
+              docker compose -f docker-compose.prod.yml ps keycloak
+              docker compose -f docker-compose.prod.yml logs --tail=100 keycloak
+              exit 1
+            fi
+            
+            # Start remaining services
+            echo 'Starting remaining services...'
+            docker compose -f docker-compose.prod.yml up -d evolution-api vault
+            
+            # Wait for services to be ready
+            echo 'Waiting for services to be ready...'
+            sleep 30
+            
+            echo 'Core services are running. Backend will start after migrations complete.'
+            
+            
+          "
+
+      - name: Configure Keycloak branding
+        run: |
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            cd /opt/customer-app
+            ./scripts/prepare_keycloak_theme.sh
+          "
+
+      - name: Provision MCP OAuth scopes
+        run: |
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            cd /opt/customer-app
+            if grep -Eiq '^MCP_ENABLED=(1|true|yes)$' .env; then
+              ./scripts/prepare_keycloak_mcp.sh
+            else
+              echo 'MCP is disabled; skipping OAuth scope provisioning'
+            fi
+          "
+
+      - name: Run database migrations
+        run: |
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            cd /opt/customer-app
+
+            # Wait for database to be fully ready
+            echo 'Waiting for database to be ready for migrations...'
+            for i in {1..30}; do
+              if docker compose -f docker-compose.prod.yml exec -T db pg_isready -U \${POSTGRES_USER} -d \${POSTGRES_DB} > /dev/null 2>&1; then
+                echo 'Database is ready for migrations'
+                break
+              fi
+              echo \"Waiting for database... (\$i/30)\"
+              sleep 2
+            done
+
+            # Run migrations before starting the long-running backend service.
+            echo 'Running database migrations...'
+            docker compose -f docker-compose.prod.yml run --rm --no-deps backend alembic upgrade head
+            MIGRATION_EXIT_CODE=\$?
+
+            if [ \$MIGRATION_EXIT_CODE -ne 0 ]; then
+              echo 'Migration failed with exit code: '\$MIGRATION_EXIT_CODE
+              echo 'Checking alembic current version...'
+              docker compose -f docker-compose.prod.yml run --rm --no-deps backend alembic current || true
+              echo 'Checking alembic history...'
+              docker compose -f docker-compose.prod.yml run --rm --no-deps backend alembic history --verbose | head -20 || true
+              exit 1
+            fi
+
+            echo 'Migrations completed successfully'
+            docker compose -f docker-compose.prod.yml run --rm --no-deps backend alembic current
+
+            echo 'Starting backend service...'
+            docker compose -f docker-compose.prod.yml up -d backend
+
+            health_check() {
+              for i in {1..120}; do
+                if curl -sf http://localhost:8001/health > /dev/null 2>&1; then
+                  echo 'Backend health check passed'
+                  return 0
+                fi
+                if [ \$((i % 6)) -eq 0 ]; then
+                  echo 'Backend container state:'
+                  docker compose -f docker-compose.prod.yml ps backend || true
+                  docker compose -f docker-compose.prod.yml logs --tail=20 backend || true
+                fi
+                echo \"Waiting for backend to be healthy... (\$i/120)\"
+                sleep 10
+              done
+              echo 'Backend health check failed'
+              return 1
+            }
+
+            if health_check; then
+              echo 'Complete stack deployment successful'
+              docker image prune -f
+            else
+              echo 'Backend deployment failed'
+              docker compose -f docker-compose.prod.yml ps
+              echo 'Backend health endpoint response, if any:'
+              curl -sv http://localhost:8001/health || true
+              echo 'Backend logs:'
+              docker compose -f docker-compose.prod.yml logs --tail=200 backend
+              exit 1
+            fi
+          "
+
+      - name: Verify deployment
+        run: |
+          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+            cd /opt/customer-app
+            
+            echo '=== Deployment Verification ==='
+            echo 'Checking locale/template variant flags...'
+            docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' customer-backend-prod | grep -qx 'USE_LOCALE_RESOLUTION=true' || { echo 'USE_LOCALE_RESOLUTION is not true'; exit 1; }
+            docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' customer-backend-prod | grep -qx 'USE_TEMPLATE_VARIANTS=true' || { echo 'USE_TEMPLATE_VARIANTS is not true'; exit 1; }
+            echo 'Checking container status...'
+            docker compose -f docker-compose.prod.yml ps
+            
+            echo 'Checking container logs...'
+            docker compose -f docker-compose.prod.yml logs backend --tail=20
+            
+            echo 'Checking if port 8001 is listening...'
+            netstat -tlnp | grep :8001 || echo 'Port 8001 not found'
+            
+            echo 'Testing internal health check (localhost:8001)...'
+            curl -sf http://localhost:8001/health || echo 'Internal health check failed'
+
+            echo 'Testing external health check (${{ vars.BACKEND_BASE_URL }})...'
+            if curl -sf ${{ vars.BACKEND_BASE_URL }}/health > /dev/null 2>&1; then
+              echo '✅ Deployment verified successfully'
+            else
+              echo '❌ External health check failed, but continuing...'
+              echo 'This might be a network/proxy issue, not the backend itself'
+            fi
+            
+            echo '=== Service Status Summary ==='
+            echo 'Backend: http://localhost:8001 (external: ${{ vars.BACKEND_BASE_URL }})'
+            echo 'Keycloak: http://localhost:8080 (admin: admin/[from secrets])'
+            echo 'Evolution API: http://localhost:8081'
+            echo 'Vault: http://localhost:8082 (token: [from secrets])'
+            echo 'Database & Redis: internal only'
+          "
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa
+
+  notify:
+    runs-on: ubuntu-latest
+    name: Notify Deployment Status
+    needs: [deploy]
+    if: always()
+    
+    steps:
+      - name: Notify Success
+        if: needs.deploy.result == 'success'
+        run: |
+          echo "✅ Backend deployment successful!"
+          echo "Deployed commit: ${{ github.sha }}"
+          echo "Deployed by: ${{ github.actor }}"
+          echo "Backend URL: ${{ vars.BACKEND_BASE_URL }}"
+
+      - name: Notify Failure
+        if: needs.deploy.result == 'failure'
+        run: |
+          echo "❌ Backend deployment failed!"
+          echo "Failed commit: ${{ github.sha }}"
+          echo "Failed by: ${{ github.actor }}"
+          exit 1
