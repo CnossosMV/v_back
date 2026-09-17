@@ -214,25 +214,25 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ vars.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
       - name: Create deployment directory
         run: |
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             sudo mkdir -p /opt/customer-app
-            sudo chown -R ${{ vars.SSH_USER }}:${{ vars.SSH_USER }} /opt/customer-app
+            sudo chown -R ${{ secrets.SSH_USER }}:${{ secrets.SSH_USER }} /opt/customer-app
             sudo chmod -R 755 /opt/customer-app
           "
 
       - name: Copy deployment files
         run: |
-          scp docker-compose.prod.yml ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/
-          scp init-databases.sql ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "mkdir -p /opt/customer-app/scripts /opt/customer-app/keycloak/themes"
-          scp scripts/prepare_keycloak_mcp.sh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/scripts/
-          scp scripts/prepare_keycloak_theme.sh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/scripts/
-          scp -r keycloak/themes/versya ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/opt/customer-app/keycloak/themes/
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          scp docker-compose.prod.yml ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/customer-app/
+          scp init-databases.sql ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/customer-app/
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "mkdir -p /opt/customer-app/scripts /opt/customer-app/keycloak/themes"
+          scp scripts/prepare_keycloak_mcp.sh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/customer-app/scripts/
+          scp scripts/prepare_keycloak_theme.sh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/customer-app/scripts/
+          scp -r keycloak/themes/versya ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/customer-app/keycloak/themes/
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             chmod 750 /opt/customer-app/scripts/prepare_keycloak_mcp.sh /opt/customer-app/scripts/prepare_keycloak_theme.sh
             find /opt/customer-app/keycloak/themes/versya -type d -exec chmod 755 {} +
             find /opt/customer-app/keycloak/themes/versya -type f -exec chmod 644 {} +
@@ -242,57 +242,57 @@ jobs:
         run: |
           # Convert to lowercase for Docker compatibility
           IMAGE_NAME_LOWER=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             cat > /opt/customer-app/.env << EOF
           BACKEND_IMAGE=${IMAGE_NAME_LOWER}:latest
-          DATABASE_URL=postgresql://${{ vars.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/${{ vars.POSTGRES_DB }}
-          POSTGRES_USER=${{ vars.POSTGRES_USER }}
+          DATABASE_URL=postgresql://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER=${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-          POSTGRES_DB=${{ vars.POSTGRES_DB }}
+          POSTGRES_DB=${{ secrets.POSTGRES_DB }}
           JWT_SECRET=${{ secrets.JWT_SECRET }}
-          BACKEND_BASE_URL=${{ vars.BACKEND_BASE_URL }}
-          API_BASE_URL=${{ vars.API_BASE_URL }}
-          SDK_CDN_URL=${{ vars.SDK_CDN_URL }}
-          CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
-          GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
-          KEYCLOAK_URL=${{ vars.KEYCLOAK_URL }}
-          KEYCLOAK_REALM=${{ vars.KEYCLOAK_REALM }}
-          KEYCLOAK_CLIENT_ID=${{ vars.KEYCLOAK_CLIENT_ID }}
-          KEYCLOAK_JWKS_URL=${{ vars.KEYCLOAK_JWKS_URL }}
-          KEYCLOAK_HOSTNAME=${{ vars.KEYCLOAK_HOSTNAME }}
-          KEYCLOAK_ADMIN_USER=${{ vars.KEYCLOAK_ADMIN_USER }}
+          BACKEND_BASE_URL=${{ secrets.BACKEND_BASE_URL }}
+          API_BASE_URL=${{ secrets.API_BASE_URL }}
+          SDK_CDN_URL=${{ secrets.SDK_CDN_URL }}
+          CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
+          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+          KEYCLOAK_URL=${{ secrets.KEYCLOAK_URL }}
+          KEYCLOAK_REALM=${{ secrets.KEYCLOAK_REALM }}
+          KEYCLOAK_CLIENT_ID=${{ secrets.KEYCLOAK_CLIENT_ID }}
+          KEYCLOAK_JWKS_URL=${{ secrets.KEYCLOAK_JWKS_URL }}
+          KEYCLOAK_HOSTNAME=${{ secrets.KEYCLOAK_HOSTNAME }}
+          KEYCLOAK_ADMIN_USER=${{ secrets.KEYCLOAK_ADMIN_USER }}
           KEYCLOAK_ADMIN_PASSWORD=${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
           EVOLUTION_API_GLOBAL_KEY=${{ secrets.EVOLUTION_API_GLOBAL_KEY }}
           MILLION_VERIFIER_API_KEY=${{ secrets.MILLION_VERIFIER_API_KEY }}
           MILLIONVERIFIER_API_BASE_URL=https://api.millionverifier.com
           MILLIONVERIFIER_BULK_API_BASE_URL=https://bulkapi.millionverifier.com
           VAULT_ROOT_TOKEN=${{ secrets.VAULT_ROOT_TOKEN }}
-          WEBSITE_URL=${{ vars.WEBSITE_URL }}
+          WEBSITE_URL=${{ secrets.WEBSITE_URL }}
           ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
-          META_APP_ID=${{ vars.META_APP_ID }}
+          META_APP_ID=${{ secrets.META_APP_ID }}
           META_APP_SECRET=${{ secrets.META_APP_SECRET }}
-          META_CONFIG_ID=${{ vars.META_CONFIG_ID }}
+          META_CONFIG_ID=${{ secrets.META_CONFIG_ID }}
           META_WEBHOOK_VERIFY_TOKEN=${{ secrets.META_WEBHOOK_VERIFY_TOKEN }}
-          FRONTEND_URL=${{ vars.FRONTEND_URL }}
+          FRONTEND_URL=${{ secrets.FRONTEND_URL }}
           VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }}
-          VAPID_PUBLIC_KEY=${{ vars.VAPID_PUBLIC_KEY }}
-          TRACKING_BASE_URL=${{ vars.TRACKING_BASE_URL }}
+          VAPID_PUBLIC_KEY=${{ secrets.VAPID_PUBLIC_KEY }}
+          TRACKING_BASE_URL=${{ secrets.TRACKING_BASE_URL }}
           VERSYA_EDGE_CONFIG_SECRET=${{ secrets.VERSYA_EDGE_CONFIG_SECRET }}
-          VERSYA_TRACKING_CNAME_TARGET=${{ vars.VERSYA_TRACKING_CNAME_TARGET }}
-          TRACKING_SDK_ORIGIN=${{ vars.TRACKING_SDK_ORIGIN }}
+          VERSYA_TRACKING_CNAME_TARGET=${{ secrets.VERSYA_TRACKING_CNAME_TARGET }}
+          TRACKING_SDK_ORIGIN=${{ secrets.TRACKING_SDK_ORIGIN }}
           CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID=${{ vars.CLOUDFLARE_ZONE_ID }}
-          MCP_ENABLED=${{ vars.MCP_ENABLED }}
-          MCP_ADMIN_ENABLED=${{ vars.MCP_ADMIN_ENABLED }}
-          MCP_PUBLIC_BASE_URL=${{ vars.MCP_PUBLIC_BASE_URL }}
-          MCP_AUTH_ISSUER=${{ vars.MCP_AUTH_ISSUER }}
-          MCP_AUTH_AUDIENCE=${{ vars.MCP_AUTH_AUDIENCE }}
-          MCP_OAUTH_CLIENT_ID=${{ vars.MCP_OAUTH_CLIENT_ID }}
-          MCP_AUDIENCE_CLIENT_ID=${{ vars.MCP_AUDIENCE_CLIENT_ID }}
-          MCP_JWKS_URL=${{ vars.MCP_JWKS_URL }}
-          MCP_ALLOWED_HOSTS=${{ vars.MCP_ALLOWED_HOSTS }}
-          MCP_ALLOWED_ORIGINS=${{ vars.MCP_ALLOWED_ORIGINS }}
-          MCP_READONLY_SQL_TIMEOUT_MS=${{ vars.MCP_READONLY_SQL_TIMEOUT_MS }}
+          CLOUDFLARE_ZONE_ID=${{ secrets.CLOUDFLARE_ZONE_ID }}
+          MCP_ENABLED=${{ secrets.MCP_ENABLED }}
+          MCP_ADMIN_ENABLED=${{ secrets.MCP_ADMIN_ENABLED }}
+          MCP_PUBLIC_BASE_URL=${{ secrets.MCP_PUBLIC_BASE_URL }}
+          MCP_AUTH_ISSUER=${{ secrets.MCP_AUTH_ISSUER }}
+          MCP_AUTH_AUDIENCE=${{ secrets.MCP_AUTH_AUDIENCE }}
+          MCP_OAUTH_CLIENT_ID=${{ secrets.MCP_OAUTH_CLIENT_ID }}
+          MCP_AUDIENCE_CLIENT_ID=${{ secrets.MCP_AUDIENCE_CLIENT_ID }}
+          MCP_JWKS_URL=${{ secrets.MCP_JWKS_URL }}
+          MCP_ALLOWED_HOSTS=${{ secrets.MCP_ALLOWED_HOSTS }}
+          MCP_ALLOWED_ORIGINS=${{ secrets.MCP_ALLOWED_ORIGINS }}
+          MCP_READONLY_SQL_TIMEOUT_MS=${{ secrets.MCP_READONLY_SQL_TIMEOUT_MS }}
           MCP_GRANT_ADMIN_SCOPE=false
           MCP_ENABLE_DYNAMIC_REGISTRATION=true
           MCP_DYNAMIC_REGISTRATION_TRUSTED_HOSTS=localhost,127.0.0.1
@@ -305,7 +305,7 @@ jobs:
         run: |
           # Convert to lowercase for Docker compatibility
           IMAGE_NAME_LOWER=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             cd /opt/customer-app
             echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             # Explicitly pull the backend image (lowercase)
@@ -316,7 +316,7 @@ jobs:
 
       - name: Deploy with zero-downtime
         run: |
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             cd /opt/customer-app
             
             echo '=== Starting Complete Stack Deployment ==='
@@ -384,14 +384,14 @@ jobs:
 
       - name: Configure Keycloak branding
         run: |
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             cd /opt/customer-app
             ./scripts/prepare_keycloak_theme.sh
           "
 
       - name: Provision MCP OAuth scopes
         run: |
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             cd /opt/customer-app
             if grep -Eiq '^MCP_ENABLED=(1|true|yes)$' .env; then
               ./scripts/prepare_keycloak_mcp.sh
@@ -402,7 +402,7 @@ jobs:
 
       - name: Run database migrations
         run: |
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             cd /opt/customer-app
 
             # Wait for database to be fully ready
@@ -470,7 +470,7 @@ jobs:
 
       - name: Verify deployment
         run: |
-          ssh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} "
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
             cd /opt/customer-app
             
             echo '=== Deployment Verification ==='
@@ -489,8 +489,8 @@ jobs:
             echo 'Testing internal health check (localhost:8001)...'
             curl -sf http://localhost:8001/health || echo 'Internal health check failed'
 
-            echo 'Testing external health check (${{ vars.BACKEND_BASE_URL }})...'
-            if curl -sf ${{ vars.BACKEND_BASE_URL }}/health > /dev/null 2>&1; then
+            echo 'Testing external health check (${{ secrets.BACKEND_BASE_URL }})...'
+            if curl -sf ${{ secrets.BACKEND_BASE_URL }}/health > /dev/null 2>&1; then
               echo '✅ Deployment verified successfully'
             else
               echo '❌ External health check failed, but continuing...'
@@ -498,7 +498,7 @@ jobs:
             fi
             
             echo '=== Service Status Summary ==='
-            echo 'Backend: http://localhost:8001 (external: ${{ vars.BACKEND_BASE_URL }})'
+            echo 'Backend: http://localhost:8001 (external: ${{ secrets.BACKEND_BASE_URL }})'
             echo 'Keycloak: http://localhost:8080 (admin: admin/[from secrets])'
             echo 'Evolution API: http://localhost:8081'
             echo 'Vault: http://localhost:8082 (token: [from secrets])'
@@ -523,7 +523,7 @@ jobs:
           echo "✅ Backend deployment successful!"
           echo "Deployed commit: ${{ github.sha }}"
           echo "Deployed by: ${{ github.actor }}"
-          echo "Backend URL: ${{ vars.BACKEND_BASE_URL }}"
+          echo "Backend URL: ${{ secrets.BACKEND_BASE_URL }}"
 
       - name: Notify Failure
         if: needs.deploy.result == 'failure'
